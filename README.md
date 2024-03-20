@@ -1,1 +1,1 @@
-# BTG-AINode
+# AI算力节点
