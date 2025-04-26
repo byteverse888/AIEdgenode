@@ -8,7 +8,12 @@ NC='\033[0m' # No Color
 # 配置参数
 CLOUD_IP="115.190.25.82:10000"
 NODE_NAME="edge-node-$(hostname)"
-TOKEN="e51953b31cdb1ab98da41ba7db35193afd3b68389abbe92bc2c7bad4c6bbe378.eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3NDQ2NTA5MTl9.ZgLJZoR3b6BoiwJEodh1vW01xl5aAQJ1L2jJkNfgXR0"
+if [ -z "$1" ]; then
+    echo -e "${RED}错误: 必须提供TOKEN参数${NC}"
+    echo "用法: ./$(basename "$0") <TOKEN>"
+    exit 1
+fi
+TOKEN="$1"
 CNI_PLUGIN="cni-plugins-linux-amd64-v1.6.0.tgz"
 
 # 1. 安装基础依赖
@@ -22,6 +27,8 @@ install_dependencies() {
 configure_containerd() {
     echo -e "${GREEN}[2/6] 配置containerd...${NC}"
     
+    # Todo:判断如果配置文件已经改过，就不做修改了
+
     # 生成默认配置
     sudo containerd config default | sudo tee /etc/containerd/config.toml > /dev/null
     
@@ -30,12 +37,9 @@ configure_containerd() {
     sudo sed -i 's|registry.k8s.io/pause:3.8|registry.aliyuncs.com/google_containers/pause:3.9|' /etc/containerd/config.toml
     
     # 添加镜像加速
-    sudo tee -a /etc/containerd/config.toml > /dev/null <<EOF
-[plugins."io.containerd.grpc.v1.cri".registry.mirrors]
-  [plugins."io.containerd.grpc.v1.cri".registry.mirrors."docker.io"]
-    endpoint=["https://docker.m.daocloud.io"]
-EOF
-    
+    if ! grep -q 'docker.m.daocloud.io' /etc/containerd/config.toml; then
+        sudo sed -i '/\[plugins\.\"io\.containerd\.grpc\.v1\.cri\".registry.mirrors\]/a\\n        [plugins."io.containerd.grpc.v1.cri".registry.mirrors."docker.io"]\n          endpoint = ["https://docker.m.daocloud.io"]' /etc/containerd/config.toml
+    fi
     sudo systemctl restart containerd
 }
 
@@ -43,11 +47,17 @@ EOF
 install_cni() {
     echo -e "${GREEN}[3/6] 安装CNI插件...${NC}"
     
+    # 检查CNI插件是否已存在
+    if [ -f "/opt/cni/bin/bridge" ] && [ -f "/etc/cni/net.d/10-containerd-net.conflist" ]; then
+        echo -e "${GREEN}检测到已存在CNI插件配置，跳过安装步骤${NC}"
+        return 0
+    fi
+
     if [ ! -f "$CNI_PLUGIN" ]; then
         echo -e "${RED}错误: CNI插件文件 $CNI_PLUGIN 不存在${NC}"
         exit 1
     fi
-    
+
     sudo mkdir -p /opt/cni/bin
     sudo tar Cxzvf /opt/cni/bin "$CNI_PLUGIN"
     
@@ -105,14 +115,16 @@ join_cluster() {
     echo -e "${GREEN}[5/6] 加入KubeEdge集群...${NC}"
     
     # 确保共享挂载
-    sudo mount --make-rshared /
-    
+    # sudo mount --make-rshared /
+   
+    # 如果目录存在，为了安全，提示手动删除目录/etc/kubeedge
+
     # 执行加入命令
     sudo keadm join \
         --cloudcore-ipport="$CLOUD_IP" \
         --token="$TOKEN" \
         --edgenode-name="$NODE_NAME" \
-        --cgroupdriver=systemd
+        --cgroupdriver=systemd 
     
     if [ $? -ne 0 ]; then
         echo -e "${RED}错误: 加入集群失败${NC}"
@@ -124,9 +136,17 @@ join_cluster() {
 configure_edge() {
     echo -e "${GREEN}[6/6] 配置边缘节点...${NC}"
     
-    # 禁用边缘节点网络插件
-    sudo sed -i '/networkPluginName:/s/.*/    networkPluginName: ""/' /etc/kubeedge/config/edgecore.yaml
-    
+    # 修改edgecore配置
+    EDGE_CORE_CONF="/etc/kubeedge/config/edgecore.yaml"
+    if [ -f "$EDGE_CORE_CONF" ]; then
+        sudo sed -i '/edgeStream/{n; s/enable: false/enable: true/}' "$EDGE_CORE_CONF"
+	sudo sed -i '/metaServer/{n;n;n; s/enable: false/enable: true/}' "$EDGE_CORE_CONF"
+        echo -e "${GREEN}已成功修改edgeStream配置${NC}"
+    else
+        echo -e "${RED}错误: 找不到配置文件 $EDGE_CORE_CONF${NC}"
+        exit 1
+    fi
+
     # 重启edgecore服务
     sudo systemctl restart edgecore.service
     
@@ -135,12 +155,21 @@ configure_edge() {
 
 # 主执行流程
 main() {
+    # 参数校验
+    if [ $# -lt 1 ]; then
+        echo -e "${RED}错误: 必须提供TOKEN参数${NC}"
+        echo "用法: ./$(basename "$0") <TOKEN>"
+        exit 1
+    fi
+    all_args=("$@")
+    TOKEN="${all_args[0]}"
+
     install_dependencies
     configure_containerd
     install_cni
     install_kubeedge
-    join_cluster
+    join_cluster $TOKEN
     configure_edge
 }
 
-main
+main "$@"
