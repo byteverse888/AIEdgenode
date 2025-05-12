@@ -7,7 +7,8 @@ NC='\033[0m' # No Color
 
 # 配置参数
 CLOUD_IP="115.190.25.82:10000"
-NODE_NAME="edge-node-$(hostname)"
+hostname=$(hostname)
+NODE_NAME="edge-${hostname,,}"
 if [ -z "$1" ]; then
     echo -e "${RED}错误: 必须提供TOKEN参数${NC}"
     echo "用法: ./$(basename "$0") <TOKEN>"
@@ -28,7 +29,7 @@ configure_containerd() {
     echo -e "${GREEN}[2/6] 配置containerd...${NC}"
     
     # Todo:判断如果配置文件已经改过，就不做修改了
-
+    mkdir -p /etc/containerd
     # 生成默认配置
     sudo containerd config default | sudo tee /etc/containerd/config.toml > /dev/null
     
