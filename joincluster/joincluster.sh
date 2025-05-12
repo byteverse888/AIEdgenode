@@ -29,7 +29,7 @@ configure_containerd() {
     echo -e "${GREEN}[2/6] 配置containerd...${NC}"
     
     # Todo:判断如果配置文件已经改过，就不做修改了
-    mkdir -p /etc/containerd
+    sudo mkdir -p /etc/containerd
     # 生成默认配置
     sudo containerd config default | sudo tee /etc/containerd/config.toml > /dev/null
     
